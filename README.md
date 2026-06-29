@@ -140,4 +140,4 @@ jupyter notebook credit_default_prediction.ipynb
 - **Raw scores need calibrating** (isotonic or Platt) before being read as probabilities of default.
 - **Fairness** is handled here by exclusion; a production system would also audit outcomes across groups.
 
-*Data: UCI Machine Learning Repository, "Default of Credit Card Clients" (CC BY 4.0). Built as a portfolio project.*
+*Data: UCI Machine Learning Repository, "Default of Credit Card Clients" (CC BY 4.0).*
