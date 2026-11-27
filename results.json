@@ -1,0 +1,57 @@
+{
+  "test_roc_auc_xgb": 0.775,
+  "test_pr_auc_xgb": 0.558,
+  "test_roc_auc_logit": 0.748,
+  "ks": 0.427,
+  "base_rate": 0.221,
+  "thresholds": {
+    "2x": {
+      "chosen": {
+        "threshold": 0.62,
+        "recall": 0.529,
+        "approval": 0.789,
+        "cost": 2273
+      },
+      "test_hindsight_optimum": {
+        "threshold": 0.65,
+        "recall": 0.506,
+        "approval": 0.805,
+        "cost": 2260
+      }
+    },
+    "5x": {
+      "chosen": {
+        "threshold": 0.38,
+        "recall": 0.754,
+        "approval": 0.533,
+        "cost": 4289
+      },
+      "test_hindsight_optimum": {
+        "threshold": 0.41,
+        "recall": 0.719,
+        "approval": 0.585,
+        "cost": 4255
+      }
+    },
+    "10x": {
+      "chosen": {
+        "threshold": 0.2,
+        "recall": 0.936,
+        "approval": 0.219,
+        "cost": 5362
+      },
+      "test_hindsight_optimum": {
+        "threshold": 0.22,
+        "recall": 0.924,
+        "approval": 0.255,
+        "cost": 5311
+      }
+    }
+  },
+  "default_rate_among_approved": {
+    "50%": 0.097,
+    "70%": 0.118,
+    "90%": 0.169
+  },
+  "threshold_selection": "5-fold out-of-fold predictions on the training set; test set used only for evaluation"
+}

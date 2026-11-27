@@ -14,8 +14,8 @@ A credit-risk model built on **real lending data**, with the things that actuall
 | PR-AUC | 0.500 | **0.558** | 0.221 |
 | KS statistic | | **0.43** | 0 |
 
-- A **cost-based threshold** turns the score into a decision: at a 10:1 cost of a missed default versus a wrongly-declined customer, the model catches **92% of defaulters**.
-- **Risk-based approval** cuts the default rate among approved customers from **22% to under 10%**.
+- A **cost-based threshold**, chosen on training folds and scored on the untouched test set, turns the score into a decision: at a 10:1 cost of a missed default versus a wrongly-declined customer, the model catches **94% of defaulters** while approving 22% of applicants.
+- **Risk-based approval** cuts the default rate among approved customers from **22% to 9.7%** when the safest half of applicants is approved.
 - The risk drivers (via SHAP) are what a credit analyst would expect, and a **single decision can be explained** line by line.
 
 ---
@@ -66,11 +66,15 @@ Beyond a single AUC number, the two score distributions show the separation dire
 
 The model outputs a risk score; the **business** sets the threshold. A missed default costs far more than a wrongly-declined good customer, so the cost-minimising cutoff sits well below 0.5, and it moves with the cost ratio:
 
-| Cost of a missed default | Threshold | Defaulters caught | Applicants approved |
+Each threshold is **chosen on out-of-fold predictions from the training set** (5-fold) and only then applied to the test set, which is never used to tune anything:
+
+| Cost of a missed default | Threshold | Defaulters caught (test) | Applicants approved (test) |
 |---|---|---|---|
-| 2x a bad decline | 0.65 | 51% | 81% |
-| 5x | 0.41 | 72% | 59% |
-| 10x | 0.22 | 92% | 26% |
+| 2x a bad decline | 0.62 | 53% | 79% |
+| 5x | 0.38 | 75% | 53% |
+| 10x | 0.20 | 94% | 22% |
+
+The test-set cost at these thresholds is within about 1% of the best cost that could have been picked with hindsight on the test set (for example 5,362 against 5,311 at 10:1), so the choice transfers well to unseen customers. The figures are in `results.json`.
 
 This is where modelling meets commercial strategy: there is no single "right" threshold without a view on what each error costs.
 
@@ -113,7 +117,7 @@ The **code** here is MIT-licensed (see `LICENSE`). The **data is not mine**: it 
 
 ```bash
 pip install -r requirements.txt
-python analysis.py                       # reproduces all eight figures
+python analysis.py                       # reproduces all eight figures and results.json
 # or open the narrative version:
 jupyter notebook credit_default_prediction.ipynb
 ```
@@ -124,6 +128,8 @@ jupyter notebook credit_default_prediction.ipynb
 .
 ├── credit_default_prediction.ipynb   # narrative analysis (executed, 8 figures)
 ├── analysis.py                        # same analysis as a script
+├── results.json                       # headline metrics and the threshold table
+├── CHANGES.md                         # what changed and why
 ├── README.md
 ├── LICENSE
 ├── requirements.txt
@@ -139,5 +145,7 @@ jupyter notebook credit_default_prediction.ipynb
 - **No income field**, so this is *behavioural* scoring, not affordability. Affordability is the subject of a companion project.
 - **Raw scores need calibrating** (isotonic or Platt) before being read as probabilities of default.
 - **Fairness** is handled here by exclusion; a production system would also audit outcomes across groups.
+- **One random split of one snapshot.** The data has no issue or observation dates, so there is no out-of-time test; the results describe a single 2005 Taiwanese card portfolio, and performance on a later population is unknown.
+- **The acceptance curve** reports default rates at fixed approval rates on the test set; nothing is tuned on it.
 
 *Data: UCI Machine Learning Repository, "Default of Credit Card Clients" (CC BY 4.0).*
