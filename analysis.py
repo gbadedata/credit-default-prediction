@@ -1,6 +1,8 @@
 import pandas as pd, numpy as np, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt, seaborn as sns
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_predict
+from sklearn.base import clone
+import json
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (roc_auc_score, average_precision_score, roc_curve,
@@ -64,6 +66,10 @@ spw = (ytr == 0).sum() / (ytr == 1).sum()
 xgb = XGBClassifier(n_estimators=400, max_depth=4, learning_rate=0.05, subsample=0.9,
                     colsample_bytree=0.8, scale_pos_weight=spw, eval_metric="aucpr",
                     random_state=RND, n_jobs=4)
+# Out-of-fold predictions on the TRAINING set: the decision threshold is chosen on these,
+# so the test set is never used to tune anything and stays an honest estimate.
+p_oof = cross_val_predict(clone(xgb), Xtr, ytr, cv=StratifiedKFold(5, shuffle=True, random_state=RND),
+                          method="predict_proba")[:, 1]
 xgb.fit(Xtr, ytr)
 p_xgb = xgb.predict_proba(Xte)[:, 1]
 
@@ -84,34 +90,45 @@ plt.tight_layout(); plt.savefig("figures/02_roc_pr_curves.png"); plt.close()
 
 # ---------------- COST-BASED THRESHOLD (the commercial decision) ----------------
 # A missed default (false negative) costs more than a wrongly-declined good customer (false positive).
-def optimal_threshold(p, ratio):
-    ths = np.linspace(0.01, 0.99, 99); costs = []
-    for t in ths:
-        pred = (p >= t).astype(int)
-        fp = ((pred == 1) & (yte == 0)).sum(); fn = ((pred == 0) & (yte == 1)).sum()
-        costs.append(ratio * fn + fp)            # FN is 'ratio' times as costly as FP
-    costs = np.array(costs); return ths[costs.argmin()], costs
-print("\nCost-optimal decision threshold (XGBoost), by cost ratio FN:FP:")
+# The threshold is CHOSEN on out-of-fold training predictions and EVALUATED on the untouched test set.
+THS = np.linspace(0.01, 0.99, 99)
+def cost_curve(p, y, ratio):
+    y = np.asarray(y)
+    return np.array([ratio * ((p < t) & (y == 1)).sum() + ((p >= t) & (y == 0)).sum() for t in THS])
+def optimal_threshold(p, y, ratio):
+    c = cost_curve(p, y, ratio); return THS[c.argmin()], c
+def decision_stats(p, y, t, ratio):
+    y = np.asarray(y); pred = (p >= t).astype(int)
+    fn = int(((pred == 0) & (y == 1)).sum()); fp = int(((pred == 1) & (y == 0)).sum())
+    return dict(threshold=round(float(t), 2), recall=round(float(((pred == 1) & (y == 1)).sum() / (y == 1).sum()), 3),
+                approval=round(float((pred == 0).mean()), 3), cost=int(ratio * fn + fp))
+print("\nCost-based decision threshold (XGBoost): chosen on out-of-fold training predictions, scored on test")
+thr_rows = {}
 for r in [2, 5, 10]:
-    t, _ = optimal_threshold(p_xgb, r)
-    pred = (p_xgb >= t).astype(int)
-    rec = ((pred==1)&(yte==1)).sum()/(yte==1).sum(); appr = (pred==0).mean()
-    print(f"  FN={r}x FP -> threshold {t:.2f} | catches {rec:.0%} of defaulters | approves {appr:.0%} of applicants")
+    t_val, _ = optimal_threshold(p_oof, ytr, r)
+    st = decision_stats(p_xgb, yte, t_val, r)
+    t_or, _ = optimal_threshold(p_xgb, yte, r)                 # hindsight optimum, for comparison only
+    oracle = decision_stats(p_xgb, yte, t_or, r)
+    thr_rows[f"{r}x"] = dict(chosen=st, test_hindsight_optimum=oracle)
+    print(f"  FN={r}x FP -> threshold {st['threshold']:.2f} (chosen on training folds) | catches {st['recall']:.0%} "
+          f"of defaulters | approves {st['approval']:.0%} | test cost {st['cost']:,} "
+          f"(hindsight-optimal on test: {oracle['threshold']:.2f}, cost {oracle['cost']:,})")
 
 RATIO = 5
-t_star, costs = optimal_threshold(p_xgb, RATIO)
+t_star, costs_val = optimal_threshold(p_oof, ytr, RATIO)
 fig, ax = plt.subplots(1, 2, figsize=(12, 4.8))
-ths = np.linspace(0.01, 0.99, 99)
-ax[0].plot(ths, costs, color="#8172b3"); ax[0].axvline(t_star, ls="--", color="#c44e52", label=f"optimal = {t_star:.2f}")
+ax[0].plot(THS, costs_val / len(ytr) * len(yte), color="#8172b3", label="training folds (scaled to test size)")
+ax[0].plot(THS, cost_curve(p_xgb, yte, RATIO), color="#55a868", alpha=0.8, label="test set")
+ax[0].axvline(t_star, ls="--", color="#c44e52", label=f"chosen on training folds = {t_star:.2f}")
 ax[0].axvline(0.5, ls=":", color="grey", label="default 0.5")
 ax[0].set_xlabel("decision threshold"); ax[0].set_ylabel(f"expected cost (FN = {RATIO}x FP)")
-ax[0].set_title("A business-optimal threshold is well below 0.5"); ax[0].legend()
+ax[0].set_title("Threshold chosen on training folds, checked on test"); ax[0].legend(fontsize=8)
 cm = confusion_matrix(yte, (p_xgb >= t_star).astype(int))
 sns.heatmap(cm, annot=True, fmt=",d", cmap="Blues", ax=ax[1],
             xticklabels=["Approve","Decline"], yticklabels=["Repaid","Defaulted"])
-ax[1].set_title(f"Decisions at the cost-optimal threshold ({t_star:.2f})"); ax[1].set_ylabel("actual"); ax[1].set_xlabel("model decision")
+ax[1].set_title(f"Test-set decisions at the chosen threshold ({t_star:.2f})"); ax[1].set_ylabel("actual"); ax[1].set_xlabel("model decision")
 plt.tight_layout(); plt.savefig("figures/03_cost_threshold.png"); plt.close()
-print(f"\nAt the cost-optimal threshold ({t_star:.2f}, FN={RATIO}x FP):")
+print(f"\nTest-set decisions at the threshold chosen on training folds ({t_star:.2f}, FN={RATIO}x FP):")
 print(classification_report(yte, (p_xgb >= t_star).astype(int), target_names=["Repaid","Default"], digits=3))
 
 # ---------------- FIG 4: acceptance curve (the commercial picture) ----------------
@@ -127,7 +144,9 @@ plt.ylabel("Default rate among approved (%)")
 plt.title("Risk-based approval cuts losses: default rate among the approved")
 plt.legend(); plt.tight_layout(); plt.savefig("figures/04_acceptance_curve.png"); plt.close()
 print("\nAcceptance curve (default rate among approved):")
+acceptance = {}
 for r in [0.5, 0.7, 0.9]:
+    acceptance[f"{r:.0%}"] = round(float(y_ord[:int(r*len(y_ord))].mean()), 3)
     print(f"  approve safest {r:.0%} -> default rate among approved = {y_ord[:int(r*len(y_ord))].mean():.1%}")
 
 # ---------------- FIG 5: probability calibration ----------------
@@ -175,4 +194,11 @@ print(f"Single-decision explanation saved for an applicant scored {risk_samp[idx
 # ---------------- SAVE ----------------
 out = Xte.copy(); out["actual"] = yte.values; out["risk_score"] = p_xgb
 out.to_csv("data/scored_test_set.csv", index=False)
+results = dict(test_roc_auc_xgb=round(float(roc_auc_score(yte, p_xgb)), 3),
+               test_pr_auc_xgb=round(float(average_precision_score(yte, p_xgb)), 3),
+               test_roc_auc_logit=round(float(roc_auc_score(yte, p_logit)), 3),
+               ks=round(float(ks), 3), base_rate=round(float(base_rate), 3),
+               thresholds=thr_rows, default_rate_among_approved=acceptance,
+               threshold_selection="5-fold out-of-fold predictions on the training set; test set used only for evaluation")
+json.dump(results, open("results.json", "w"), indent=2)
 print("\nAll figures + scored test set saved. DONE.")
